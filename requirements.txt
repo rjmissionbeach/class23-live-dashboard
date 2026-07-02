@@ -3,3 +3,4 @@ requests
 streamlit-autorefresh
 pandas
 yfinance
+altair
