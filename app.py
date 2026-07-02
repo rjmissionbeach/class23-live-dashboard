@@ -112,7 +112,7 @@ index_display_names = {
     "^DJI": "Dow Jones"
 }
 
-watchlist = ["MSFT", "CVNA", "INTC", "NVDA", "SOFI"]
+watchlist = ["MSFT", "CVNA", "INTC", "ZZZZZZ", "SOFI"]
 
 crypto_pairs = [
     "BINANCE:BTCUSDT",
