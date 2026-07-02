@@ -2,3 +2,4 @@ streamlit
 requests
 streamlit-autorefresh
 pandas
+yfinance
