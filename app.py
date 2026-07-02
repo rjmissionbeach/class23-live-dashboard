@@ -1,10 +1,10 @@
 import time
-from datetime import datetime, timezone, timedelta
-from html import escape
+from datetime import datetime, timezone
 
 import pandas as pd
 import requests
 import streamlit as st
+import yfinance as yf
 from streamlit_autorefresh import st_autorefresh
 
 
@@ -13,158 +13,18 @@ from streamlit_autorefresh import st_autorefresh
 # ------------------------------------------------------------
 
 st.set_page_config(
-    page_title="Finnhub Market Dashboard",
+    page_title="Market Dashboard",
     page_icon="📈",
     layout="wide"
 )
 
-refresh_count = st_autorefresh(
+st_autorefresh(
     interval=15_000,
-    key="finnhub_market_refresh"
+    key="market_dashboard_refresh"
 )
 
-
-# ------------------------------------------------------------
-# Styling
-# ------------------------------------------------------------
-
-st.markdown(
-    """
-    <style>
-        .main-title {
-            font-size: 2.5rem;
-            font-weight: 850;
-            margin-bottom: 0.2rem;
-        }
-
-        .subtitle {
-            font-size: 1rem;
-            color: #666;
-            margin-bottom: 1.2rem;
-        }
-
-        .section-header {
-            padding: 0.75rem 1rem;
-            border-radius: 14px;
-            font-size: 1.35rem;
-            font-weight: 800;
-            margin-top: 1.5rem;
-            margin-bottom: 1rem;
-            color: white;
-        }
-
-        .market-header {
-            background: linear-gradient(90deg, #1f4e79, #3b82f6);
-        }
-
-        .watchlist-header {
-            background: linear-gradient(90deg, #5b2c83, #8b5cf6);
-        }
-
-        .crypto-header {
-            background: linear-gradient(90deg, #8a4b08, #f59e0b);
-        }
-
-        .quote-card {
-            border-radius: 18px;
-            padding: 1.1rem;
-            margin-bottom: 1rem;
-            background: white;
-            border: 1px solid #e5e7eb;
-            box-shadow: 0 4px 14px rgba(0,0,0,0.08);
-        }
-
-        .symbol-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 0.75rem;
-        }
-
-        .symbol {
-            font-size: 1.35rem;
-            font-weight: 850;
-            color: #111827;
-        }
-
-        .badge-up {
-            color: #065f46;
-            background-color: #d1fae5;
-            padding: 0.25rem 0.55rem;
-            border-radius: 999px;
-            font-weight: 750;
-            font-size: 0.85rem;
-        }
-
-        .badge-down {
-            color: #991b1b;
-            background-color: #fee2e2;
-            padding: 0.25rem 0.55rem;
-            border-radius: 999px;
-            font-weight: 750;
-            font-size: 0.85rem;
-        }
-
-        .badge-flat {
-            color: #374151;
-            background-color: #e5e7eb;
-            padding: 0.25rem 0.55rem;
-            border-radius: 999px;
-            font-weight: 750;
-            font-size: 0.85rem;
-        }
-
-        .price {
-            font-size: 2rem;
-            font-weight: 850;
-            color: #111827;
-            margin-bottom: 0.25rem;
-        }
-
-        .change-up {
-            color: #059669;
-            font-size: 1rem;
-            font-weight: 750;
-        }
-
-        .change-down {
-            color: #dc2626;
-            font-size: 1rem;
-            font-weight: 750;
-        }
-
-        .change-flat {
-            color: #6b7280;
-            font-size: 1rem;
-            font-weight: 750;
-        }
-
-        .as-of {
-            margin-top: 0.8rem;
-            color: #6b7280;
-            font-size: 0.82rem;
-        }
-
-        .small-note {
-            color: #6b7280;
-            font-size: 0.9rem;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    """
-    <div class="main-title">📈 Finnhub Market Dashboard</div>
-    <div class="subtitle">
-        Market overview, personal watchlist, and crypto quotes. Auto-refreshes every 15 seconds.
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-st.caption(f"Refresh count: {refresh_count}")
+st.title("📈 Market Dashboard")
+st.caption("Live quotes from Finnhub. SPY/QQQ/DIA chart from Yahoo Finance via yfinance.")
 
 
 # ------------------------------------------------------------
@@ -180,9 +40,7 @@ if not FINNHUB_API_KEY:
     )
     st.stop()
 
-
 QUOTE_URL = "https://finnhub.io/api/v1/quote"
-STOCK_CANDLE_URL = "https://finnhub.io/api/v1/stock/candle"
 
 HEADERS = {
     "X-Finnhub-Token": FINNHUB_API_KEY
@@ -204,23 +62,11 @@ crypto_pairs = [
 ]
 
 groups = {
-    "Market Overview": {
-        "symbols": market_overview,
-        "header_class": "market-header"
-    },
-    "Watchlist": {
-        "symbols": watchlist,
-        "header_class": "watchlist-header"
-    },
-    "Crypto Pairs": {
-        "symbols": crypto_pairs,
-        "header_class": "crypto-header"
-    }
+    "Market Overview": market_overview,
+    "Watchlist": watchlist,
+    "Crypto Pairs": crypto_pairs
 }
 
-
-# 11 quote calls every 15 seconds = about 44 calls/minute for one active session.
-# Candle data is cached separately, so it does not get pulled every refresh.
 REQUEST_SLEEP_SECONDS = 0.35
 
 
@@ -240,63 +86,36 @@ def get_finnhub_quote(symbol: str) -> dict:
 
 
 @st.cache_data(ttl=900)
-def get_stock_candles(symbol: str, days_back: int = 60) -> pd.DataFrame:
+def get_yfinance_chart_data(symbols, period="1mo") -> pd.DataFrame:
     """
-    Pull daily stock candles from Finnhub and return a DataFrame with date and close.
-
-    Cached for 15 minutes so the chart does not create 3 extra API calls
-    on every 15-second app refresh.
+    Gets recent historical close prices from Yahoo Finance.
+    Cached for 15 minutes so this does not reload every 15-second refresh.
     """
-    end_dt = datetime.now(timezone.utc)
-    start_dt = end_dt - timedelta(days=days_back)
-
-    params = {
-        "symbol": symbol,
-        "resolution": "D",
-        "from": int(start_dt.timestamp()),
-        "to": int(end_dt.timestamp())
-    }
-
-    response = requests.get(
-        STOCK_CANDLE_URL,
-        params=params,
-        headers=HEADERS,
-        timeout=30
+    data = yf.download(
+        tickers=symbols,
+        period=period,
+        interval="1d",
+        auto_adjust=True,
+        progress=False,
+        group_by="column"
     )
 
-    response.raise_for_status()
-    data = response.json()
-
-    if data.get("s") != "ok":
-        raise ValueError(f"Finnhub candle response for {symbol}: {data}")
-
-    df = pd.DataFrame({
-        "date": pd.to_datetime(data["t"], unit="s", utc=True),
-        symbol: data["c"]
-    })
-
-    return df
-
-
-def get_market_chart_data(symbols: list[str]) -> pd.DataFrame:
-    """
-    Combine close-price candle data for SPY, QQQ, and DIA.
-    """
-    combined = None
-
-    for symbol in symbols:
-        df = get_stock_candles(symbol)
-
-        if combined is None:
-            combined = df
-        else:
-            combined = combined.merge(df, on="date", how="outer")
-
-    if combined is None or combined.empty:
+    if data.empty:
         return pd.DataFrame()
 
-    combined = combined.sort_values("date")
-    return combined
+    # For multiple tickers, yfinance usually returns multi-level columns.
+    if isinstance(data.columns, pd.MultiIndex):
+        close = data["Close"].copy()
+    else:
+        close = data[["Close"]].copy()
+        close.columns = symbols
+
+    close = close.dropna(how="all")
+
+    # Normalize to 100 so SPY, QQQ, and DIA are comparable on one chart.
+    normalized = close / close.iloc[0] * 100
+
+    return normalized
 
 
 def format_price(value):
@@ -355,104 +174,33 @@ def format_as_of_timestamp(raw_timestamp):
         return f"Unrecognized timestamp: {raw_timestamp}"
 
 
-def get_direction_classes(change):
-    try:
-        change = float(change)
-    except Exception:
-        return "badge-flat", "change-flat", "■", "Flat"
-
-    if change > 0:
-        return "badge-up", "change-up", "▲", "Up"
-    elif change < 0:
-        return "badge-down", "change-down", "▼", "Down"
-    else:
-        return "badge-flat", "change-flat", "■", "Flat"
-
-
 def render_quote_card(symbol: str, quote: dict):
     current_price = quote.get("c")
     change = quote.get("d")
     percent_change = quote.get("dp")
     timestamp = quote.get("t")
 
-    badge_class, change_class, arrow, direction_label = get_direction_classes(change)
+    price_text = format_price(current_price)
 
-    safe_symbol = escape(symbol)
-    price_text = escape(format_price(current_price))
-    change_text = escape(format_change(change))
-    percent_text = escape(format_percent(percent_change))
-    as_of_text = escape(format_as_of_timestamp(timestamp))
+    if change is None or percent_change is None:
+        delta_text = None
+    else:
+        delta_text = f"{format_change(change)} | {format_percent(percent_change)}"
 
-    st.markdown(
-        f"""
-        <div class="quote-card">
-            <div class="symbol-row">
-                <div class="symbol">{safe_symbol}</div>
-                <div class="{badge_class}">{arrow} {direction_label}</div>
-            </div>
-
-            <div class="price">{price_text}</div>
-
-            <div class="{change_class}">
-                {change_text} &nbsp; | &nbsp; {percent_text}
-            </div>
-
-            <div class="as-of">
-                As of: {as_of_text}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
+    st.metric(
+        label=symbol,
+        value=price_text,
+        delta=delta_text
     )
+
+    st.caption(f"As of: {format_as_of_timestamp(timestamp)}")
 
     with st.expander(f"Raw Finnhub response for {symbol}"):
         st.json(quote)
 
 
-def render_market_chart():
-    st.subheader("SPY, QQQ, and DIA — recent daily close")
-
-    try:
-        chart_df = get_market_chart_data(market_overview)
-
-        if chart_df.empty:
-            st.warning("No candle data returned for the market overview chart.")
-            return
-
-        chart_df = chart_df.set_index("date")
-
-        st.line_chart(chart_df, height=320)
-
-        latest_date = chart_df.dropna(how="all").index.max()
-        st.caption(
-            f"Chart uses daily close data from Finnhub `/stock/candle`. "
-            f"Latest candle shown: {latest_date.strftime('%Y-%m-%d')} UTC. "
-            f"Candle data is cached for 15 minutes."
-        )
-
-    except Exception as e:
-        st.warning(
-            "Could not load Finnhub stock candle data for the chart. "
-            "Your quote endpoint can still work even if the candle endpoint is unavailable "
-            f"for your key. Error: {e}"
-        )
-
-
-def render_group(group_name: str, group_info: dict):
-    symbols = group_info["symbols"]
-    header_class = group_info["header_class"]
-
-    st.markdown(
-        f"""
-        <div class="section-header {header_class}">
-            {escape(group_name)}
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    if group_name == "Market Overview":
-        render_market_chart()
+def render_quote_section(section_name: str, symbols: list[str]):
+    st.subheader(section_name)
 
     for start in range(0, len(symbols), 3):
         row_symbols = symbols[start:start + 3]
@@ -460,49 +208,77 @@ def render_group(group_name: str, group_info: dict):
 
         for col, symbol in zip(cols, row_symbols):
             with col:
-                try:
-                    quote = get_finnhub_quote(symbol)
-                    render_quote_card(symbol, quote)
+                with st.container(border=True):
+                    try:
+                        quote = get_finnhub_quote(symbol)
+                        render_quote_card(symbol, quote)
 
-                except requests.exceptions.HTTPError as e:
-                    st.error(f"{symbol}: HTTP error from Finnhub: {e}")
+                    except requests.exceptions.HTTPError as e:
+                        st.error(f"{symbol}: HTTP error from Finnhub: {e}")
 
-                except requests.exceptions.RequestException as e:
-                    st.error(f"{symbol}: Request error: {e}")
+                    except requests.exceptions.RequestException as e:
+                        st.error(f"{symbol}: Request error: {e}")
 
-                except Exception as e:
-                    st.error(f"{symbol}: Unexpected error: {e}")
+                    except Exception as e:
+                        st.error(f"{symbol}: Unexpected error: {e}")
 
                 time.sleep(REQUEST_SLEEP_SECONDS)
+
+
+def render_market_chart():
+    st.subheader("SPY, QQQ, DIA — 1-month indexed performance")
+
+    try:
+        chart_df = get_yfinance_chart_data(market_overview, period="1mo")
+
+        if chart_df.empty:
+            st.warning("No chart data returned from yfinance.")
+            return
+
+        st.line_chart(chart_df, height=320)
+
+        st.caption(
+            "Chart is indexed to 100 at the first observation so SPY, QQQ, and DIA "
+            "can be compared on the same scale. Cached for 15 minutes."
+        )
+
+    except Exception as e:
+        st.warning(f"Could not load chart data from yfinance: {e}")
 
 
 # ------------------------------------------------------------
 # Dashboard
 # ------------------------------------------------------------
 
-total_symbols = sum(len(group_info["symbols"]) for group_info in groups.values())
+total_symbols = sum(len(symbols) for symbols in groups.values())
 
 st.info(
-    f"This dashboard requests {total_symbols} Finnhub quotes every 15 seconds, "
+    f"This app requests {total_symbols} Finnhub quotes every 15 seconds, "
     f"or about {total_symbols * 4} quote calls per minute for one active session. "
-    "The SPY/QQQ/DIA chart uses cached daily candle data."
+    "The historical chart is cached separately."
 )
-
-for group_name, group_info in groups.items():
-    render_group(group_name, group_info)
 
 st.divider()
 
-st.markdown(
-    """
-    <div class="small-note">
-        Finnhub quote fields used here:
-        <code>c</code> = current price,
-        <code>d</code> = change,
-        <code>dp</code> = percent change,
-        <code>t</code> = timestamp.
-        The chart uses daily close prices from Finnhub's stock candle endpoint.
-    </div>
-    """,
-    unsafe_allow_html=True
+# Section 1: Market Overview
+render_market_chart()
+render_quote_section("Market Overview", market_overview)
+
+st.divider()
+
+# Section 2: Watchlist
+render_quote_section("Watchlist", watchlist)
+
+st.divider()
+
+# Section 3: Crypto Pairs
+render_quote_section("Crypto Pairs", crypto_pairs)
+
+st.divider()
+
+st.caption(
+    "Finnhub quote fields used: c = current price, d = change, "
+    "dp = percent change, t = timestamp. "
+    "Historical chart uses yfinance because Finnhub stock candles are not available "
+    "on the free key used here."
 )
