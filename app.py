@@ -24,15 +24,9 @@ st_autorefresh(
     key="market_dashboard_refresh"
 )
 
-st.title("📈 Market Dashboard")
-st.caption(
-    "Market index data from Yahoo Finance via yfinance. "
-    "Watchlist and crypto quotes from Finnhub."
-)
-
 
 # ------------------------------------------------------------
-# CSS: section backgrounds and quote cards
+# CSS: section backgrounds and metric cards
 # ------------------------------------------------------------
 
 st.markdown(
@@ -42,7 +36,7 @@ st.markdown(
             background: linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%);
             border: 1px solid rgba(37, 99, 235, 0.30);
             border-radius: 22px;
-            padding: 1.25rem 1.25rem 0.85rem 1.25rem;
+            padding: 1.25rem;
             margin-bottom: 1.25rem;
             box-shadow: 0 8px 24px rgba(30, 64, 175, 0.08);
         }
@@ -51,7 +45,7 @@ st.markdown(
             background: linear-gradient(135deg, #f3e8ff 0%, #faf5ff 100%);
             border: 1px solid rgba(124, 58, 237, 0.30);
             border-radius: 22px;
-            padding: 1.25rem 1.25rem 0.85rem 1.25rem;
+            padding: 1.25rem;
             margin-bottom: 1.25rem;
             box-shadow: 0 8px 24px rgba(91, 33, 182, 0.08);
         }
@@ -60,14 +54,21 @@ st.markdown(
             background: linear-gradient(135deg, #fef3c7 0%, #fffbeb 100%);
             border: 1px solid rgba(245, 158, 11, 0.35);
             border-radius: 22px;
-            padding: 1.25rem 1.25rem 0.85rem 1.25rem;
+            padding: 1.25rem;
             margin-bottom: 1.25rem;
             box-shadow: 0 8px 24px rgba(146, 64, 14, 0.08);
         }
 
-        .st-key-market_overview_section [data-testid="stMetric"],
-        .st-key-watchlist_section [data-testid="stMetric"],
-        .st-key-crypto_section [data-testid="stMetric"] {
+        .st-key-commodities_section {
+            background: linear-gradient(135deg, #dcfce7 0%, #f0fdf4 100%);
+            border: 1px solid rgba(22, 163, 74, 0.30);
+            border-radius: 22px;
+            padding: 1.25rem;
+            margin-bottom: 1.25rem;
+            box-shadow: 0 8px 24px rgba(21, 128, 61, 0.08);
+        }
+
+        .stMetric {
             background-color: rgba(255, 255, 255, 0.78);
             border: 1px solid rgba(255, 255, 255, 0.85);
             border-radius: 16px;
@@ -77,6 +78,39 @@ st.markdown(
     </style>
     """,
     unsafe_allow_html=True
+)
+
+
+# ------------------------------------------------------------
+# Sidebar navigation
+# ------------------------------------------------------------
+
+st.sidebar.title("📊 Dashboard Sections")
+
+selected_page = st.sidebar.radio(
+    "Choose a section",
+    [
+        "Market Overview",
+        "Watchlist",
+        "Crypto",
+        "Commodities"
+    ]
+)
+
+st.sidebar.divider()
+st.sidebar.caption("Auto-refreshes every 15 seconds.")
+
+
+# ------------------------------------------------------------
+# App title
+# ------------------------------------------------------------
+
+st.title("📈 Market Dashboard")
+
+st.caption(
+    "Use the left sidebar to switch between sections. "
+    "Market indexes and commodities use yfinance. "
+    "Watchlist and crypto quotes use Finnhub."
 )
 
 
@@ -101,7 +135,7 @@ HEADERS = {
 
 
 # ------------------------------------------------------------
-# Ticker groups
+# Tickers
 # ------------------------------------------------------------
 
 market_overview = ["^GSPC", "^IXIC", "^DJI"]
@@ -112,13 +146,27 @@ index_display_names = {
     "^DJI": "Dow Jones"
 }
 
-watchlist = ["MSFT", "CVNA", "INTC", "ZZZZZZ", "SOFI"]
+watchlist = ["MSFT", "CVNA", "INTC", "NVDA", "SOFI"]
 
 crypto_pairs = [
     "BINANCE:BTCUSDT",
     "BINANCE:ETHUSDT",
     "BINANCE:DOTUSDT"
 ]
+
+commodities = ["CL=F", "GC=F", "KC=F"]
+
+commodity_display_names = {
+    "CL=F": "WTI Crude Oil",
+    "GC=F": "Gold",
+    "KC=F": "Coffee"
+}
+
+commodity_units = {
+    "CL=F": "$/barrel",
+    "GC=F": "$/oz",
+    "KC=F": "¢/lb"
+}
 
 REQUEST_SLEEP_SECONDS = 0.35
 
@@ -127,20 +175,21 @@ REQUEST_SLEEP_SECONDS = 0.35
 # Formatting helpers
 # ------------------------------------------------------------
 
-def format_price(value, dollar=True):
+def format_price(value, prefix="", suffix=""):
     if value is None:
         return "N/A"
 
     try:
         value = float(value)
-        prefix = "$" if dollar else ""
 
-        if value >= 100:
-            return f"{prefix}{value:,.2f}"
-        elif value >= 1:
-            return f"{prefix}{value:,.4f}"
+        if abs(value) >= 100:
+            formatted = f"{value:,.2f}"
+        elif abs(value) >= 1:
+            formatted = f"{value:,.4f}"
         else:
-            return f"{prefix}{value:,.6f}"
+            formatted = f"{value:,.6f}"
+
+        return f"{prefix}{formatted}{suffix}"
 
     except Exception:
         return str(value)
@@ -203,7 +252,7 @@ def format_yfinance_timestamp(ts):
 
 
 # ------------------------------------------------------------
-# Finnhub quote helpers
+# Finnhub helpers
 # ------------------------------------------------------------
 
 def get_finnhub_quote(symbol: str) -> dict:
@@ -230,7 +279,7 @@ def render_finnhub_quote_card(symbol: str, quote: dict):
 
     st.metric(
         label=symbol,
-        value=format_price(current_price, dollar=True),
+        value=format_price(current_price, prefix="$"),
         delta=delta_text
     )
 
@@ -278,7 +327,6 @@ def extract_close_series(data: pd.DataFrame, symbol: str) -> pd.Series:
     close = None
 
     if isinstance(data.columns, pd.MultiIndex):
-        # Common shape: first level is price field, second level is ticker.
         if "Close" in data.columns.get_level_values(0):
             close_data = data["Close"]
 
@@ -290,7 +338,6 @@ def extract_close_series(data: pd.DataFrame, symbol: str) -> pd.Series:
             else:
                 close = close_data
 
-        # Alternate shape: first level is ticker, second level is price field.
         elif "Close" in data.columns.get_level_values(1):
             close_data = data.xs("Close", axis=1, level=1)
 
@@ -323,7 +370,7 @@ def get_yfinance_chart_data(symbols_tuple, period="1mo") -> pd.DataFrame:
     """
     Gets daily historical close prices from Yahoo Finance.
     Returns percent change from each ticker's first valid observation.
-    Downloads each symbol separately so one missing symbol does not break the chart.
+    Cached for 15 minutes.
     """
     close_series = []
 
@@ -372,18 +419,21 @@ def get_yfinance_latest_quotes(symbols_tuple) -> dict:
     - percent change from previous close
     - latest timestamp
 
-    Downloads each index separately for reliability.
+    Tries 1-minute, then 5-minute, then 1-day data.
     """
     results = {}
 
     for symbol in symbols_tuple:
         close = pd.Series(dtype=float, name=symbol)
 
-        # Try 1-minute first. If that fails, try 5-minute.
-        for interval in ["1m", "5m"]:
+        for interval, period in [
+            ("1m", "5d"),
+            ("5m", "5d"),
+            ("1d", "1mo")
+        ]:
             data = yf.download(
                 tickers=symbol,
-                period="5d",
+                period=period,
                 interval=interval,
                 auto_adjust=True,
                 progress=False,
@@ -429,26 +479,30 @@ def get_yfinance_latest_quotes(symbols_tuple) -> dict:
 
 
 # ------------------------------------------------------------
-# Market overview rendering
+# Chart rendering
 # ------------------------------------------------------------
 
-def render_market_chart():
-    st.markdown("#### S&P 500, Nasdaq Composite, Dow Jones — 1-month performance")
-
-    chart_df = get_yfinance_chart_data(tuple(market_overview), period="1mo")
+def render_percent_change_chart(
+    symbols,
+    display_names,
+    title,
+    y_title="Percent change since first day",
+    period="1mo"
+):
+    chart_df = get_yfinance_chart_data(tuple(symbols), period=period)
 
     if chart_df.empty:
         st.warning("No chart data returned from yfinance.")
         return
 
-    chart_df = chart_df.rename(columns=index_display_names)
+    chart_df = chart_df.rename(columns=display_names)
 
     chart_long = (
         chart_df
         .reset_index()
         .melt(
             id_vars="Date",
-            var_name="Index",
+            var_name="Series",
             value_name="Percent Change"
         )
         .dropna()
@@ -465,13 +519,13 @@ def render_market_chart():
             x=alt.X("Date:T", title="Date"),
             y=alt.Y(
                 "Percent Change:Q",
-                title="Percent change since first day",
+                title=y_title,
                 scale=alt.Scale(zero=False)
             ),
-            color=alt.Color("Index:N", title="Index"),
+            color=alt.Color("Series:N", title="Series"),
             tooltip=[
                 alt.Tooltip("Date:T", title="Date"),
-                alt.Tooltip("Index:N", title="Index"),
+                alt.Tooltip("Series:N", title="Series"),
                 alt.Tooltip("Percent Change:Q", title="% change", format=".2f")
             ]
         )
@@ -479,20 +533,31 @@ def render_market_chart():
         .interactive()
     )
 
+    st.markdown(f"#### {title}")
     st.altair_chart(chart, use_container_width=True)
 
-    included = sorted(chart_long["Index"].unique().tolist())
+    included = sorted(chart_long["Series"].unique().tolist())
 
     st.caption(
-        "Chart shows percent change from each index's first valid observation. "
-        "The y-axis is allowed to zoom in so the movement is visible. "
+        "Chart shows percent change from each series' first valid observation. "
+        "The y-axis is allowed to zoom in so movement is visible. "
         f"Included series: {', '.join(included)}. "
         "Chart data is cached for 15 minutes."
     )
 
 
-def render_yfinance_quote_card(symbol: str, quote: dict):
-    display_name = index_display_names.get(symbol, symbol)
+# ------------------------------------------------------------
+# yfinance quote cards
+# ------------------------------------------------------------
+
+def render_yfinance_quote_card(
+    symbol: str,
+    quote: dict,
+    display_names: dict,
+    price_prefix="",
+    price_suffix=""
+):
+    display_name = display_names.get(symbol, symbol)
 
     price = quote.get("price")
     change = quote.get("change")
@@ -506,7 +571,7 @@ def render_yfinance_quote_card(symbol: str, quote: dict):
 
     st.metric(
         label=display_name,
-        value=format_price(price, dollar=False),
+        value=format_price(price, prefix=price_prefix, suffix=price_suffix),
         delta=delta_text
     )
 
@@ -525,18 +590,36 @@ def render_yfinance_quote_card(symbol: str, quote: dict):
         )
 
 
-def render_market_quote_grid(symbols: list[str]):
+def render_yfinance_quote_grid(
+    symbols,
+    display_names,
+    price_prefix="",
+    units_by_symbol=None
+):
+    units_by_symbol = units_by_symbol or {}
     quotes = get_yfinance_latest_quotes(tuple(symbols))
 
-    cols = st.columns(3)
+    for start in range(0, len(symbols), 3):
+        row_symbols = symbols[start:start + 3]
+        cols = st.columns(3)
 
-    for col, symbol in zip(cols, symbols):
-        with col:
-            if symbol in quotes:
-                render_yfinance_quote_card(symbol, quotes[symbol])
-            else:
-                display_name = index_display_names.get(symbol, symbol)
-                st.error(f"No yfinance quote data returned for {display_name}")
+        for col, symbol in zip(cols, row_symbols):
+            with col:
+                if symbol in quotes:
+                    suffix = ""
+                    if symbol in units_by_symbol:
+                        suffix = f" {units_by_symbol[symbol]}"
+
+                    render_yfinance_quote_card(
+                        symbol=symbol,
+                        quote=quotes[symbol],
+                        display_names=display_names,
+                        price_prefix=price_prefix,
+                        price_suffix=suffix
+                    )
+                else:
+                    display_name = display_names.get(symbol, symbol)
+                    st.error(f"No yfinance quote data returned for {display_name}")
 
 
 # ------------------------------------------------------------
@@ -549,52 +632,107 @@ def section_heading(title, subtitle, icon):
 
 
 # ------------------------------------------------------------
-# Dashboard
+# Pages
 # ------------------------------------------------------------
 
-finnhub_symbol_count = len(watchlist) + len(crypto_pairs)
+def render_market_overview_page():
+    with st.container(key="market_overview_section"):
+        section_heading(
+            title="Market Overview",
+            subtitle="Actual market indexes from yfinance: S&P 500, Nasdaq Composite, and Dow Jones.",
+            icon="🔵"
+        )
 
-st.info(
-    f"This app requests {finnhub_symbol_count} Finnhub quotes every 15 seconds, "
-    f"or about {finnhub_symbol_count * 4} Finnhub quote calls per minute for one active session. "
-    "The market index section uses yfinance instead of Finnhub."
-)
+        render_percent_change_chart(
+            symbols=market_overview,
+            display_names=index_display_names,
+            title="S&P 500, Nasdaq Composite, Dow Jones — 1-month performance"
+        )
+
+        st.divider()
+
+        render_yfinance_quote_grid(
+            symbols=market_overview,
+            display_names=index_display_names,
+            price_prefix=""
+        )
 
 
-with st.container(key="market_overview_section"):
-    section_heading(
-        title="Market Overview",
-        subtitle="Actual market indexes from yfinance: S&P 500, Nasdaq Composite, and Dow Jones.",
-        icon="🔵"
+def render_watchlist_page():
+    with st.container(key="watchlist_section"):
+        section_heading(
+            title="Watchlist",
+            subtitle="Selected individual stocks using Finnhub's quote endpoint.",
+            icon="🟣"
+        )
+
+        render_finnhub_quote_grid(watchlist)
+
+
+def render_crypto_page():
+    with st.container(key="crypto_section"):
+        section_heading(
+            title="Crypto",
+            subtitle="Crypto quotes using Finnhub's exchange-prefixed crypto symbols.",
+            icon="🟠"
+        )
+
+        render_finnhub_quote_grid(crypto_pairs)
+
+
+def render_commodities_page():
+    with st.container(key="commodities_section"):
+        section_heading(
+            title="Commodities",
+            subtitle="WTI crude oil, gold, and coffee futures from yfinance.",
+            icon="🟢"
+        )
+
+        render_percent_change_chart(
+            symbols=commodities,
+            display_names=commodity_display_names,
+            title="WTI crude oil, gold, coffee — 1-month performance"
+        )
+
+        st.divider()
+
+        render_yfinance_quote_grid(
+            symbols=commodities,
+            display_names=commodity_display_names,
+            price_prefix="",
+            units_by_symbol=commodity_units
+        )
+
+
+# ------------------------------------------------------------
+# Dashboard router
+# ------------------------------------------------------------
+
+if selected_page == "Market Overview":
+    render_market_overview_page()
+
+elif selected_page == "Watchlist":
+    st.info(
+        f"This page requests {len(watchlist)} Finnhub quotes every 15 seconds, "
+        f"or about {len(watchlist) * 4} calls per minute for one active session."
     )
+    render_watchlist_page()
 
-    render_market_chart()
-    st.divider()
-    render_market_quote_grid(market_overview)
-
-
-with st.container(key="watchlist_section"):
-    section_heading(
-        title="Watchlist",
-        subtitle="Selected individual stocks using Finnhub's quote endpoint.",
-        icon="🟣"
+elif selected_page == "Crypto":
+    st.info(
+        f"This page requests {len(crypto_pairs)} Finnhub quotes every 15 seconds, "
+        f"or about {len(crypto_pairs) * 4} calls per minute for one active session."
     )
+    render_crypto_page()
 
-    render_finnhub_quote_grid(watchlist)
+elif selected_page == "Commodities":
+    render_commodities_page()
 
 
-with st.container(key="crypto_section"):
-    section_heading(
-        title="Crypto Pairs",
-        subtitle="Crypto quotes using Finnhub's exchange-prefixed crypto symbols.",
-        icon="🟠"
-    )
-
-    render_finnhub_quote_grid(crypto_pairs)
-
+st.divider()
 
 st.caption(
-    "Market index data comes from yfinance. "
+    "Market index and commodity data come from yfinance. "
     "Watchlist and crypto data use Finnhub quote fields: "
     "c = current price, d = change, dp = percent change, t = timestamp."
 )
