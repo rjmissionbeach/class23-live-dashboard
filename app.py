@@ -7,6 +7,7 @@ import requests
 import streamlit as st
 import yfinance as yf
 from streamlit_autorefresh import st_autorefresh
+from streamlit_extras.stylable_container import stylable_container
 
 
 # ------------------------------------------------------------
@@ -56,11 +57,13 @@ HEADERS = {
 # ------------------------------------------------------------
 
 # yfinance index tickers
-market_overview = ["^GSPC", "^NDX", "^DJI"]
+# Changed Nasdaq from ^NDX to ^IXIC because ^IXIC is usually more reliable
+# for the Nasdaq Composite in yfinance.
+market_overview = ["^GSPC", "^IXIC", "^DJI"]
 
 index_display_names = {
     "^GSPC": "S&P 500",
-    "^NDX": "Nasdaq 100",
+    "^IXIC": "Nasdaq Composite",
     "^DJI": "Dow Jones"
 }
 
@@ -76,20 +79,42 @@ REQUEST_SLEEP_SECONDS = 0.35
 
 
 # ------------------------------------------------------------
-# Section styling
+# Colored section styles
 # ------------------------------------------------------------
 
-def section_banner(title, subtitle, color_name):
-    color_map = {
-        "blue": "🔵",
-        "violet": "🟣",
-        "orange": "🟠",
-        "green": "🟢"
-    }
+MARKET_SECTION_STYLE = """
+{
+    background: linear-gradient(135deg, rgba(219,234,254,0.95), rgba(239,246,255,0.95));
+    border: 1px solid rgba(37,99,235,0.25);
+    border-radius: 20px;
+    padding: 1.25rem 1.25rem 0.75rem 1.25rem;
+    margin-bottom: 1.2rem;
+}
+"""
 
-    icon = color_map.get(color_name, "🔵")
+WATCHLIST_SECTION_STYLE = """
+{
+    background: linear-gradient(135deg, rgba(245,243,255,0.95), rgba(250,245,255,0.95));
+    border: 1px solid rgba(124,58,237,0.25);
+    border-radius: 20px;
+    padding: 1.25rem 1.25rem 0.75rem 1.25rem;
+    margin-bottom: 1.2rem;
+}
+"""
 
-    st.markdown(f"## {icon} :{color_name}[{title}]")
+CRYPTO_SECTION_STYLE = """
+{
+    background: linear-gradient(135deg, rgba(254,243,199,0.95), rgba(255,251,235,0.95));
+    border: 1px solid rgba(245,158,11,0.30);
+    border-radius: 20px;
+    padding: 1.25rem 1.25rem 0.75rem 1.25rem;
+    margin-bottom: 1.2rem;
+}
+"""
+
+
+def section_heading(title, subtitle, icon):
+    st.markdown(f"## {icon} {title}")
     st.caption(subtitle)
 
 
@@ -221,30 +246,50 @@ def render_finnhub_quote_grid(symbols: list[str]):
 def get_yfinance_chart_data(symbols, period="1mo") -> pd.DataFrame:
     """
     Gets daily historical close prices from Yahoo Finance.
-    Returns percent change from the first observation.
+    Returns percent change from each ticker's first valid observation.
     Cached for 15 minutes.
-    """
-    data = yf.download(
-        tickers=symbols,
-        period=period,
-        interval="1d",
-        auto_adjust=True,
-        progress=False,
-        group_by="column"
-    )
 
-    if data.empty:
+    Downloads each symbol separately so one missing symbol does not break the whole chart.
+    """
+    close_series = []
+
+    for symbol in symbols:
+        data = yf.download(
+            tickers=symbol,
+            period=period,
+            interval="1d",
+            auto_adjust=True,
+            progress=False
+        )
+
+        if data.empty or "Close" not in data.columns:
+            continue
+
+        close = data["Close"].dropna()
+
+        if close.empty:
+            continue
+
+        close.name = symbol
+        close_series.append(close)
+
+    if not close_series:
         return pd.DataFrame()
 
-    if isinstance(data.columns, pd.MultiIndex):
-        close = data["Close"].copy()
-    else:
-        close = data[["Close"]].copy()
-        close.columns = symbols
+    close_df = pd.concat(close_series, axis=1).dropna(how="all")
 
-    close = close.dropna(how="all")
+    pct_change = pd.DataFrame(index=close_df.index)
 
-    pct_change = (close / close.iloc[0] - 1.0) * 100
+    for symbol in close_df.columns:
+        series = close_df[symbol].dropna()
+
+        if series.empty:
+            continue
+
+        first_value = series.iloc[0]
+        pct_change[symbol] = (close_df[symbol] / first_value - 1.0) * 100
+
+    pct_change.index.name = "Date"
 
     return pct_change
 
@@ -259,50 +304,40 @@ def get_yfinance_latest_quotes(symbols) -> dict:
     - latest timestamp
 
     Cached for 15 seconds, matching the app refresh rate.
+    Downloads each index separately for reliability.
     """
-    data = yf.download(
-        tickers=symbols,
-        period="5d",
-        interval="1m",
-        auto_adjust=True,
-        progress=False,
-        group_by="column"
-    )
-
-    if data.empty:
-        return {}
-
-    if isinstance(data.columns, pd.MultiIndex):
-        close = data["Close"].copy()
-    else:
-        close = data[["Close"]].copy()
-        close.columns = symbols
-
-    close = close.dropna(how="all")
-
     results = {}
 
     for symbol in symbols:
-        if symbol not in close.columns:
+        data = yf.download(
+            tickers=symbol,
+            period="5d",
+            interval="1m",
+            auto_adjust=True,
+            progress=False
+        )
+
+        if data.empty or "Close" not in data.columns:
             continue
 
-        series = close[symbol].dropna()
+        close = data["Close"].dropna()
 
-        if series.empty:
+        if close.empty:
             continue
 
-        latest_price = float(series.iloc[-1])
-        latest_time = series.index[-1]
+        latest_price = float(close.iloc[-1])
+        latest_time = close.index[-1]
 
         # Find the previous trading day's last available price.
-        unique_dates = pd.Series(series.index.date).drop_duplicates().tolist()
+        date_index = pd.Series(close.index.date, index=close.index)
+        unique_dates = date_index.drop_duplicates().tolist()
 
         if len(unique_dates) >= 2:
             previous_date = unique_dates[-2]
-            previous_day_series = series[pd.Series(series.index.date, index=series.index) == previous_date]
+            previous_day_series = close[date_index == previous_date]
             previous_close = float(previous_day_series.iloc[-1])
         else:
-            previous_close = float(series.iloc[0])
+            previous_close = float(close.iloc[0])
 
         change = latest_price - previous_close
 
@@ -326,7 +361,9 @@ def format_yfinance_timestamp(ts):
         return "No timestamp returned"
 
     try:
-        if getattr(ts, "tzinfo", None) is None:
+        ts = pd.Timestamp(ts)
+
+        if ts.tzinfo is None:
             ts = ts.tz_localize("UTC")
         else:
             ts = ts.tz_convert("UTC")
@@ -338,7 +375,7 @@ def format_yfinance_timestamp(ts):
 
 
 def render_market_chart():
-    st.markdown("#### S&P 500, Nasdaq 100, Dow Jones — 1-month performance")
+    st.markdown("#### S&P 500, Nasdaq Composite, Dow Jones — 1-month performance")
 
     try:
         chart_df = get_yfinance_chart_data(market_overview, period="1mo")
@@ -347,36 +384,34 @@ def render_market_chart():
             st.warning("No chart data returned from yfinance.")
             return
 
+        # Rename columns to display names after calculating returns.
+        chart_df = chart_df.rename(columns=index_display_names)
+
         chart_long = (
             chart_df
             .reset_index()
             .melt(
-                id_vars=chart_df.index.name or "Date",
-                var_name="Ticker",
+                id_vars="Date",
+                var_name="Index",
                 value_name="Percent Change"
             )
-        )
-
-        date_col = chart_df.index.name or "Date"
-
-        chart_long["Ticker"] = chart_long["Ticker"].map(
-            lambda x: index_display_names.get(x, x)
+            .dropna()
         )
 
         chart = (
             alt.Chart(chart_long)
             .mark_line(point=True)
             .encode(
-                x=alt.X(f"{date_col}:T", title="Date"),
+                x=alt.X("Date:T", title="Date"),
                 y=alt.Y(
                     "Percent Change:Q",
                     title="Percent change since first day",
                     scale=alt.Scale(zero=False)
                 ),
-                color=alt.Color("Ticker:N", title="Index"),
+                color=alt.Color("Index:N", title="Index"),
                 tooltip=[
-                    alt.Tooltip(f"{date_col}:T", title="Date"),
-                    alt.Tooltip("Ticker:N", title="Index"),
+                    alt.Tooltip("Date:T", title="Date"),
+                    alt.Tooltip("Index:N", title="Index"),
                     alt.Tooltip("Percent Change:Q", title="% change", format=".2f")
                 ]
             )
@@ -386,9 +421,11 @@ def render_market_chart():
 
         st.altair_chart(chart, use_container_width=True)
 
+        included = sorted(chart_long["Index"].unique().tolist())
         st.caption(
-            "Chart shows percent change from the first observation. "
+            "Chart shows percent change from each index's first valid observation. "
             "The y-axis is allowed to zoom in so the movement is visible. "
+            f"Included series: {', '.join(included)}. "
             "Chart data is cached for 15 minutes."
         )
 
@@ -445,7 +482,8 @@ def render_market_quote_grid(symbols: list[str]):
                     if symbol in quotes:
                         render_yfinance_quote_card(symbol, quotes[symbol])
                     else:
-                        st.error(f"No yfinance quote data returned for {symbol}")
+                        display_name = index_display_names.get(symbol, symbol)
+                        st.error(f"No yfinance quote data returned for {display_name}")
 
 
 # ------------------------------------------------------------
@@ -460,60 +498,59 @@ st.info(
     "The market index section uses yfinance instead of Finnhub."
 )
 
-st.divider()
-
 
 # ------------------------------------------------------------
 # Section 1: Market Overview
 # ------------------------------------------------------------
 
-section_banner(
-    title="Market Overview",
-    subtitle="Actual index tickers from yfinance: S&P 500, Nasdaq 100, and Dow Jones.",
-    color_name="blue"
-)
+with stylable_container(
+    key="market_overview_section",
+    css_styles=MARKET_SECTION_STYLE
+):
+    section_heading(
+        title="Market Overview",
+        subtitle="Actual market indexes from yfinance: S&P 500, Nasdaq Composite, and Dow Jones.",
+        icon="🔵"
+    )
 
-with st.container(border=True):
     render_market_chart()
     st.divider()
     render_market_quote_grid(market_overview)
-
-
-st.divider()
 
 
 # ------------------------------------------------------------
 # Section 2: Watchlist
 # ------------------------------------------------------------
 
-section_banner(
-    title="Watchlist",
-    subtitle="Selected individual stocks using Finnhub's quote endpoint.",
-    color_name="violet"
-)
+with stylable_container(
+    key="watchlist_section",
+    css_styles=WATCHLIST_SECTION_STYLE
+):
+    section_heading(
+        title="Watchlist",
+        subtitle="Selected individual stocks using Finnhub's quote endpoint.",
+        icon="🟣"
+    )
 
-with st.container(border=True):
     render_finnhub_quote_grid(watchlist)
-
-
-st.divider()
 
 
 # ------------------------------------------------------------
 # Section 3: Crypto Pairs
 # ------------------------------------------------------------
 
-section_banner(
-    title="Crypto Pairs",
-    subtitle="Crypto quotes using Finnhub's exchange-prefixed crypto symbols.",
-    color_name="orange"
-)
+with stylable_container(
+    key="crypto_section",
+    css_styles=CRYPTO_SECTION_STYLE
+):
+    section_heading(
+        title="Crypto Pairs",
+        subtitle="Crypto quotes using Finnhub's exchange-prefixed crypto symbols.",
+        icon="🟠"
+    )
 
-with st.container(border=True):
     render_finnhub_quote_grid(crypto_pairs)
 
-
-st.divider()
 
 st.caption(
     "Market index data comes from yfinance. "
